@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Shushka — Interactive 3D Model</title>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+:root{
+  --bg:#0d1520; --panel:#111c2b; --panel2:#16233570; --accent:#4fb0ff;
+  --text:#eef3fa; --muted:#9db0c6; --border:#26364d;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){ --bg:#eef2f7; --panel:#ffffff; --panel2:#ffffffcc; --text:#0d1520; --muted:#516176; --border:#d4dde8; }
+}
+*{box-sizing:border-box;}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;overflow:hidden;}
+#app{position:relative;height:100%;width:100%;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);}
+#canvas-holder{position:absolute;inset:0;}
+header{position:absolute;top:calc(14px + env(safe-area-inset-top,0px));left:14px;right:14px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none;z-index:5;}
+h1{font-size:20px;margin:0;letter-spacing:.3px;}
+p.sub{margin:2px 0 0;font-size:12px;color:var(--muted);max-width:320px;}
+.badge{background:var(--panel2);backdrop-filter:blur(6px);border:1px solid var(--border);border-radius:10px;padding:8px 12px;pointer-events:auto;}
+#hint{position:absolute;bottom:calc(14px + env(safe-area-inset-bottom,0px));left:14px;font-size:12px;color:var(--muted);background:var(--panel2);backdrop-filter:blur(6px);border:1px solid var(--border);padding:8px 12px;border-radius:10px;z-index:5;max-width:260px;}
+#legend{position:absolute;top:calc(90px + env(safe-area-inset-top,0px));left:14px;background:var(--panel2);backdrop-filter:blur(6px);border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:12px;z-index:5;max-height:56vh;overflow-y:auto;width:190px;}
+#legend h3{margin:0 0 6px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;}
+.legend-item{display:flex;align-items:center;gap:8px;padding:5px 4px;border-radius:6px;cursor:pointer;transition:background .15s;}
+.legend-item:hover,.legend-item.active{background:var(--panel);}
+.dot{width:9px;height:9px;border-radius:50%;flex:none;}
+#info{position:absolute;right:14px;bottom:calc(14px + env(safe-area-inset-bottom,0px));width:min(320px,42vw);min-width:220px;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;z-index:6;display:none;box-shadow:0 8px 24px #0006;}
+#info h2{margin:0 0 6px;font-size:15px;color:var(--accent);}
+#info p{margin:0;font-size:13px;line-height:1.5;color:var(--text);}
+#info .mode{margin-top:8px;font-size:11px;color:var(--muted);}
+#info button{position:absolute;top:8px;right:10px;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer;}
+#modebar{position:absolute;bottom:calc(14px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);display:flex;gap:6px;background:var(--panel2);backdrop-filter:blur(6px);border:1px solid var(--border);border-radius:10px;padding:5px;z-index:5;}
+#modebar button{background:transparent;border:none;color:var(--muted);font-size:12px;padding:7px 12px;border-radius:7px;cursor:pointer;}
+#modebar button.active{background:var(--accent);color:#04101c;font-weight:600;}
+#labelToggle{position:absolute;top:calc(14px + env(safe-area-inset-top,0px));right:14px;z-index:6;}
+#labelToggle button{background:var(--panel2);backdrop-filter:blur(6px);border:1px solid var(--border);color:var(--text);font-size:12px;padding:8px 12px;border-radius:10px;cursor:pointer;}
+#labelToggle button.active{background:var(--accent);color:#04101c;border-color:var(--accent);}
+@media (max-width:640px){
+  #legend{width:130px;font-size:11px;max-height:44vh;}
+  p.sub{display:none;}
+  #info{width:auto;left:14px;right:14px;}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="canvas-holder"></div>
+  <header>
+    <div class="badge"><h1>Shushka</h1><p class="sub">Retrofit moisture-management system — drag to orbit, pinch/scroll to zoom, tap a part to inspect it.</p></div>
+  </header>
+  <div id="legend"><h3>Parts</h3><div id="legend-list"></div></div>
+  <div id="labelToggle"><button id="btn-labels" class="active">Labels: On</button></div>
+  <div id="modebar">
+    <button id="btn-vent" class="active">Ventilation Mode</button>
+    <button id="btn-dry">Active Drying Mode</button>
+  </div>
+  <div id="hint">Click / tap any highlighted part on the shed to see what it does.</div>
+  <div id="info">
+    <button onclick="closeInfo()">✕</button>
+    <h2 id="info-title"></h2>
+    <p id="info-desc"></p>
+    <div class="mode" id="info-mode"></div>
+  </div>
+</div>
+
+<script>
+const PARTS = [
+  {id:'sensor1', name:'Environmental Sensor — Zone 1', color:0x4fb0ff, desc:'Monitors temperature, humidity and (optional) VOC levels near the storage stacks. Feeds the worst-zone reading to the controller.'},
+  {id:'sensor2', name:'Environmental Sensor — Zone 2', color:0x4fb0ff, desc:'A second monitoring node elsewhere in the shed — multi-zone sensing catches localized moisture pockets a single central sensor would miss.'},
+  {id:'damperVent', name:'Motorized Damper (Ventilation)', color:0x36c2ff, desc:'Opens when ambient conditions are safe, letting natural airflow ventilate the shed with no mechanical drying running.'},
+  {id:'damperDry', name:'Motorized Damper (Active Drying)', color:0xff6a4f, desc:'Closes off natural airflow when humidity crosses the threshold, routing air through the condenser/desiccant stage instead.'},
+  {id:'desiccant', name:'Passive Desiccant Cassette', color:0xd99a4e, desc:'A swappable silica-gel pre-drying stage upstream of the condenser. Absorbs bulk moisture passively, cutting condenser runtime.'},
+  {id:'condenser', name:'Condenser Unit', color:0xb8c2cc, desc:'Removes moisture from the air by condensation once desiccant pre-drying isn\u2019t enough — the main active-drying component.'},
+  {id:'fans', name:'Circulation Fans', color:0x8d97a1, desc:'Ensure uniform airflow through the storage volume so drying is even across the shed, not just near the condenser.'},
+  {id:'grader', name:'Intake Grading Module (Planned)', color:0xf2b84b, desc:'Camera + small compute unit (Raspberry Pi class) at the shed entrance. Flags visibly damaged or bruised produce before it enters storage, so the drying system only preserves stock worth keeping. Planned integration \u2014 not yet built.'},
+  {id:'rejectbin', name:'Reject Bin', color:0xb84a4a, desc:'Collects produce flagged by the grading module (bruised, damaged, or early-rot) so it is sold or used quickly instead of contaminating stored stock.'},
+  {id:'dashboard', name:'Dashboard + Sell/Hold Signal', color:0x9b7bff, desc:'Shows live shed conditions alongside nearby mandi price signals, flagging sell-now vs hold windows so produce is not stored past the point it should have sold. Software extension of the planned dashboard/app.'},
+  {id:'curtain', name:'Insulated Roll-Down Curtain Panels', color:0xc4d2de, desc:'Modular foil-faced insulated panels that enclose the crop zone. Rolled up in Ventilation Mode; lowered in Active Drying Mode so the condenser dries a sealed loop instead of the outdoors. Standard-width panels with overlap joints, a weighted foam-backed bottom hem, and a hand-crank or rope (motor optional later). Design concept \u2014 not yet built or tested.'},
+  {id:'voc', name:'VOC Sensor', color:0x7ee08a, desc:'Monitors volatile organic compound gases linked to onset of rot and deterioration \u2014 an early-warning signal alongside temperature and humidity.'},
+  {id:'drainage', name:'Water Drainage', color:0x3d94c7, desc:'Collects condensate from the condenser via gravity drainage into a low-maintenance tray and pipe \u2014 no active pump required.'},
+  {id:'solar', name:'Solar Integration (Optional)', color:0x1c2b4a, desc:'Optional rooftop solar panel providing supplementary power \u2014 a mitigation for grid power outages, not required for base operation.'},
+  {id:'panel', name:'Control Panel', color:0xeaeef2, desc:'Houses the ESP32 controller. Runs threshold logic plus predictive control using weather-forecast data to pre-empt humidity spikes.'},
+  {id:'crops', name:'Crop Storage (Onion crates shown)', color:0x9a3b3b, desc:'The stored crop itself. Same retrofit kit works across bulb/root/rhizome crops — onion, garlic, potato, ginger, turmeric.'},
+  {id:'shed', name:'Existing Shed Structure', color:0x5a4632, desc:'The unmodified shed frame. Shushka bolts on — no demolition or new civil construction required.'},
+];
+
+let scene, camera, renderer, controls, raycaster, mouse;
+let clickable = [];
+let labelSprites = [];
+let activeInfoId = null;
+let mode = 'vent';
+let labelsOn = true;
+let curtainPanels = [], curtainP = 0, curtainTarget = 0;
+
+init();
+animate();
+
+function skyTexture(){
+  const c = document.createElement('canvas'); c.width=8; c.height=256;
+  const ctx = c.getContext('2d');
+  const g = ctx.createLinearGradient(0,0,0,256);
+  g.addColorStop(0,'#8fb8e8'); g.addColorStop(0.45,'#cfe0ee'); g.addColorStop(0.75,'#f3d9b8'); g.addColorStop(1,'#e8bd8f');
+  ctx.fillStyle=g; ctx.fillRect(0,0,8,256);
+  const tex = new THREE.CanvasTexture(c);
+  tex.magFilter = THREE.LinearFilter;
+  return tex;
+}
+function groundTexture(){
+  const c = document.createElement('canvas'); c.width=512; c.height=512;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(256,256,40,256,256,380);
+  g.addColorStop(0,'#4a3b26'); g.addColorStop(1,'#241c12');
+  ctx.fillStyle=g; ctx.fillRect(0,0,512,512);
+  ctx.globalAlpha=0.15;
+  for(let i=0;i<900;i++){
+    ctx.fillStyle = Math.random()>0.5? '#6b5636':'#1a140c';
+    const x=Math.random()*512, y=Math.random()*512, s=Math.random()*2.2;
+    ctx.fillRect(x,y,s,s);
+  }
+  return new THREE.CanvasTexture(c);
+}
+function roofTexture(){
+  const c = document.createElement('canvas'); c.width=64; c.height=64;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle='#3d454f'; ctx.fillRect(0,0,64,64);
+  for(let x=0;x<64;x+=6){
+    ctx.fillStyle = (x/6)%2? '#333a43':'#454d57';
+    ctx.fillRect(x,0,3,64);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(10,3);
+  return tex;
+}
+function labelSprite(text, colorHex){
+  const c = document.createElement('canvas'); c.width=340; c.height=90;
+  const ctx = c.getContext('2d');
+  const col = '#'+colorHex.toString(16).padStart(6,'0');
+  ctx.fillStyle='rgba(10,16,26,0.82)';
+  roundRect(ctx,4,20,332,48,10); ctx.fill();
+  ctx.strokeStyle=col; ctx.lineWidth=2; roundRect(ctx,4,20,332,48,10); ctx.stroke();
+  ctx.fillStyle=col; ctx.beginPath(); ctx.arc(26,44,6,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#eef3fa'; ctx.font='600 22px -apple-system,Arial'; ctx.textBaseline='middle';
+  ctx.fillText(text, 42, 45);
+  const tex = new THREE.CanvasTexture(c);
+  const mat = new THREE.SpriteMaterial({map:tex, transparent:true, depthTest:false});
+  const spr = new THREE.Sprite(mat);
+  spr.scale.set(2.6,0.7,1);
+  spr.renderOrder = 999;
+  return spr;
+}
+function roundRect(ctx,x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
+
+function init(){
+  scene = new THREE.Scene();
+  const skyGeo = new THREE.SphereGeometry(90,16,16);
+  const skyMat = new THREE.MeshBasicMaterial({map:skyTexture(), side:THREE.BackSide, fog:false});
+  scene.add(new THREE.Mesh(skyGeo, skyMat));
+  scene.fog = new THREE.Fog(0xcfe0ee, 20, 55);
+
+  camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 200);
+  camera.position.set(13, 9, 15);
+
+  renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  document.getElementById('canvas-holder').appendChild(renderer.domElement);
+
+  controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.target.set(0,2.5,0);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 6;
+  controls.maxDistance = 34;
+  controls.maxPolarAngle = Math.PI/2.05;
+
+  scene.add(new THREE.HemisphereLight(0xcfe0ee, 0x3a2f1e, 0.65));
+  const sun = new THREE.DirectionalLight(0xfff2df, 1.3);
+  sun.position.set(14,20,9);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048,2048);
+  sun.shadow.camera.left=-16; sun.shadow.camera.right=16;
+  sun.shadow.camera.top=16; sun.shadow.camera.bottom=-16;
+  sun.shadow.bias = -0.0015;
+  scene.add(sun);
+  const fill = new THREE.DirectionalLight(0x88aaff, 0.25);
+  fill.position.set(-10,6,-8);
+  scene.add(fill);
+
+  const groundTex = groundTexture();
+  const ground = new THREE.Mesh(
+    new THREE.CircleGeometry(35,48),
+    new THREE.MeshStandardMaterial({map:groundTex, roughness:1})
+  );
+  ground.rotation.x = -Math.PI/2;
+  ground.receiveShadow = true;
+  scene.add(ground);
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(12.4,0.2,9.4), new THREE.MeshStandardMaterial({color:0x828d97, roughness:0.85}));
+  slab.position.set(0,0.1,0);
+  slab.receiveShadow = true; slab.castShadow = true;
+  scene.add(slab);
+
+  buildEnvironment();
+  buildShed();
+  buildContents();
+  buildLegend();
+
+  raycaster = new THREE.Raycaster();
+  mouse = new THREE.Vector2();
+
+  renderer.domElement.addEventListener('click', onClick);
+  window.addEventListener('resize', onResize);
+  document.getElementById('btn-vent').addEventListener('click', ()=>setMode('vent'));
+  document.getElementById('btn-dry').addEventListener('click', ()=>setMode('dry'));
+  document.getElementById('btn-labels').addEventListener('click', toggleLabels);
+}
+
+function buildEnvironment(){
+  const trunkMat = new THREE.MeshStandardMaterial({color:0x5a4327, roughness:1});
+  const leafMat = new THREE.MeshStandardMaterial({color:0x4c6b34, roughness:0.9});
+  const spots = [[-14,-10],[-16,4],[15,-12],[17,3],[-11,12],[13,11],[-19,-2],[19,-6]];
+  spots.forEach(([x,z])=>{
+    const h = 2.2+Math.random()*1.3;
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.14,0.2,h,6), trunkMat);
+    trunk.position.set(x,h/2,z); trunk.castShadow=true;
+    scene.add(trunk);
+    const leaf = new THREE.Mesh(new THREE.SphereGeometry(1.1+Math.random()*0.5,8,8), leafMat);
+    leaf.position.set(x,h+0.9,z); leaf.castShadow=true;
+    scene.add(leaf);
+  });
+}
+
+function part(geo, color, x,y,z, id, meta, opts){
+  opts = opts||{};
+  const mat = new THREE.MeshStandardMaterial({color, roughness:opts.roughness??0.5, metalness:opts.metalness??0.2});
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(x,y,z);
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  if(id){
+    mesh.userData = {id, baseColor:color, ...meta};
+    clickable.push(mesh);
+    const spr = labelSprite(meta.name.split(' — ')[0].split(' (')[0], color);
+    const lift = opts.labelLift ?? 0.9;
+    spr.position.set(x, y+lift, z);
+    scene.add(spr); labelSprites.push(spr);
+  }
+  scene.add(mesh);
+  return mesh;
+}
+
+function buildShed(){
+  const postMat = new THREE.MeshStandardMaterial({color:0x6b5233, roughness:0.85});
+  const postGeo = new THREE.CylinderGeometry(0.14,0.16,4.4,10);
+  [[-5.8,-3.9],[-5.8,3.9],[5.8,-3.9],[5.8,3.9],[0,-3.9],[0,3.9]].forEach(([x,z])=>{
+    const p = new THREE.Mesh(postGeo, postMat); p.position.set(x,2.2,z); p.castShadow=true; p.receiveShadow=true;
+    scene.add(p);
+  });
+  // roof (two sloped corrugated planes)
+  const roofTex = roofTexture();
+  const roofMat = new THREE.MeshStandardMaterial({map:roofTex, roughness:0.55, metalness:0.4, color:0xffffff});
+  const roofGeo = new THREE.BoxGeometry(12.8,0.12,5.3);
+  const roofL = new THREE.Mesh(roofGeo, roofMat);
+  roofL.position.set(0,4.72,-2.6); roofL.rotation.x = -0.28; roofL.castShadow=true; roofL.receiveShadow=true;
+  scene.add(roofL);
+  const roofR = new THREE.Mesh(roofGeo, roofMat);
+  roofR.position.set(0,4.72,2.6); roofR.rotation.x = 0.28; roofR.castShadow=true; roofR.receiveShadow=true;
+  scene.add(roofR);
+  const ridge = new THREE.Mesh(new THREE.BoxGeometry(12.8,0.22,0.22), new THREE.MeshStandardMaterial({color:0x2f353c,metalness:0.5,roughness:0.5}));
+  ridge.position.set(0,4.98,0); scene.add(ridge);
+  // back wall — corrugated sheet look
+  const wallMat = new THREE.MeshStandardMaterial({color:0x8a6d47, roughness:0.9});
+  const back = new THREE.Mesh(new THREE.BoxGeometry(12,4.3,0.15), wallMat);
+  back.position.set(0,2.2,-4.3); back.castShadow=true; back.receiveShadow=true;
+  scene.add(back);
+  for(let x=-5.8;x<=5.8;x+=0.9){
+    const rib = new THREE.Mesh(new THREE.BoxGeometry(0.06,4.3,0.05), new THREE.MeshStandardMaterial({color:0x715a3a, roughness:0.9}));
+    rib.position.set(x,2.2,-4.22); scene.add(rib);
+  }
+}
+
+function buildContents(){
+  // sensors — pole + housing + antenna blip
+  [[-4.3,-2.3,'sensor1'],[-1.6,-1.9,'sensor2']].forEach(([x,z,id])=>{
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.03,0.03,1.3,6), new THREE.MeshStandardMaterial({color:0x2b3341}));
+    pole.position.set(x,0.65,z); pole.castShadow=true; scene.add(pole);
+    const meta = PARTS.find(p=>p.id===id);
+    part(new THREE.BoxGeometry(0.22,0.3,0.12), meta.color, x,1.35,z, id, meta, {labelLift:0.6, roughness:0.35, metalness:0.3});
+  });
+
+  // roof dampers — louvered vents with fins
+  function damper(x,z,id,tilt){
+    const meta = PARTS.find(p=>p.id===id);
+    const base = part(new THREE.BoxGeometry(0.95,0.28,0.75), meta.color, x,4.9,z, id, meta, {labelLift:0.55, metalness:0.35});
+    for(let i=-2;i<=2;i++){
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.85,0.03,0.1), new THREE.MeshStandardMaterial({color:0x21262c, metalness:0.5, roughness:0.4}));
+      fin.position.set(x, 4.9+ i*0.05, z+i*0.13); fin.rotation.x = tilt;
+      fin.castShadow=true; scene.add(fin);
+    }
+  }
+  damper(-2.2,-1.4,'damperVent', 0.5);
+  damper(1.6,-0.6,'damperDry', 0.5);
+
+  // crop storage — sacks of onions on wooden pallets
+  const cropMeta = PARTS.find(p=>p.id==='crops');
+  const onionMat = [0x9a3b3b,0xb14a4a,0x7d3350,0xc06a4e].map(c=>new THREE.MeshStandardMaterial({color:c, roughness:0.55}));
+  const pallets = [];
+  for(let ix=-5.1;ix<=-0.6;ix+=1.7){
+    for(let iz=-3.6;iz<=1.6;iz+=1.9){
+      const pallet = new THREE.Mesh(new THREE.BoxGeometry(1.5,0.15,1.6), new THREE.MeshStandardMaterial({color:0x6b5233,roughness:0.9}));
+      pallet.position.set(ix,0.1,iz); pallet.receiveShadow=true; scene.add(pallet);
+      const crateFrame = new THREE.Mesh(new THREE.BoxGeometry(1.4,0.9,1.5), new THREE.MeshStandardMaterial({color:0x8a6d47, roughness:0.9, wireframe:false, transparent:true, opacity:0.18}));
+      crateFrame.position.set(ix,0.65,iz); scene.add(crateFrame);
+      for(let n=0;n<14;n++){
+        const onion = new THREE.Mesh(new THREE.SphereGeometry(0.16+Math.random()*0.05,8,8), onionMat[Math.floor(Math.random()*onionMat.length)]);
+        onion.position.set(ix+(Math.random()-0.5)*1.1, 0.3+Math.random()*0.7, iz+(Math.random()-0.5)*1.2);
+        onion.castShadow=true; onion.receiveShadow=true;
+        scene.add(onion);
+      }
+      pallets.push([ix,iz]);
+    }
+  }
+  const [cx,cz] = pallets[Math.floor(pallets.length/2)];
+  const cropHit = new THREE.Mesh(new THREE.BoxGeometry(1.4,1.1,1.5), new THREE.MeshStandardMaterial({visible:false}));
+  cropHit.position.set(cx,0.65,cz);
+  cropHit.userData = {id:'crops', baseColor:0x9a3b3b, ...cropMeta};
+  scene.add(cropHit); clickable.push(cropHit);
+  const cropSpr = labelSprite('Crop Storage', 0x9a3b3b); cropSpr.position.set(cx,1.7,cz); scene.add(cropSpr); labelSprites.push(cropSpr);
+
+  // desiccant cassette — grid-front box
+  const des = PARTS.find(p=>p.id==='desiccant');
+  part(new THREE.BoxGeometry(1.1,1.1,0.5), des.color, 2.9,2.9,-1.8,'desiccant',des,{labelLift:0.85, roughness:0.7});
+  for(let gx=-0.4;gx<=0.4;gx+=0.2){
+    for(let gy=-0.4;gy<=0.4;gy+=0.2){
+      const cell = new THREE.Mesh(new THREE.BoxGeometry(0.16,0.16,0.05), new THREE.MeshStandardMaterial({color:0xc9954f, roughness:0.6}));
+      cell.position.set(2.9+gx,2.9+gy,-1.53); scene.add(cell);
+    }
+  }
+
+  // condenser unit — body + grille + fans + legs
+  const cond = PARTS.find(p=>p.id==='condenser');
+  part(new THREE.BoxGeometry(1.35,1.7,0.95), cond.color, 2.9,1.35,-1.8,'condenser',cond,{labelLift:1.1, metalness:0.4, roughness:0.4});
+  const fanMeta = PARTS.find(p=>p.id==='fans');
+  [0.42,-0.42].forEach((dy)=>{
+    const fan = part(new THREE.CylinderGeometry(0.34,0.34,0.1,24), fanMeta.color, 2.9,1.35+dy,-1.31,'fans',fanMeta,{labelLift:0.5, metalness:0.5, roughness:0.3});
+    fan.rotation.x = Math.PI/2;
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.08,0.08,0.12,12), new THREE.MeshStandardMaterial({color:0x2b3341}));
+    hub.rotation.x = Math.PI/2; hub.position.set(2.9,1.35+dy,-1.28); scene.add(hub);
+  });
+  [[-0.55,-0.4],[0.55,-0.4],[-0.55,0.4],[0.55,0.4]].forEach(([dx,dz])=>{
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,0.5,8), new THREE.MeshStandardMaterial({color:0x2b3341}));
+    leg.position.set(2.9+dx,0.25,-1.8+dz); leg.castShadow=true; scene.add(leg);
+  });
+
+  // control panel — box with small screen glow
+  const panel = PARTS.find(p=>p.id==='panel');
+  part(new THREE.BoxGeometry(0.55,0.9,0.22), panel.color, 3.75,1.1,-0.4,'panel',panel,{labelLift:0.65, metalness:0.3, roughness:0.35});
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.32,0.22), new THREE.MeshStandardMaterial({color:0x2ea8ff, emissive:0x1560a0, emissiveIntensity:0.6}));
+  screen.position.set(3.75,1.28,-0.29); scene.add(screen);
+
+  // shed structure clickable marker
+  const shedMeta = PARTS.find(p=>p.id==='shed');
+  part(new THREE.CylinderGeometry(0.16,0.18,4.4,10), shedMeta.color, -5.8,2.2,-3.9,'shed',shedMeta,{labelLift:2.6, roughness:0.85});
+
+  // ---- Intake grading module (planned): table + camera arch + compute box ----
+  const grader = PARTS.find(p=>p.id==='grader');
+  const tableMat = new THREE.MeshStandardMaterial({color:0x7d8791, metalness:0.4, roughness:0.5});
+  const table = new THREE.Mesh(new THREE.BoxGeometry(2.6,0.12,1.1), tableMat);
+  table.position.set(-3.2,0.85,3.3); table.castShadow=true; table.receiveShadow=true; scene.add(table);
+  [[-1.2,-0.45],[1.2,-0.45],[-1.2,0.45],[1.2,0.45]].forEach(([dx,dz])=>{
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.04,0.8,8), tableMat);
+    leg.position.set(-3.2+dx,0.45,3.3+dz); leg.castShadow=true; scene.add(leg);
+  });
+  // belt strip + a few onions passing through
+  const belt = new THREE.Mesh(new THREE.BoxGeometry(2.4,0.03,0.7), new THREE.MeshStandardMaterial({color:0x22262b, roughness:0.9}));
+  belt.position.set(-3.2,0.93,3.3); scene.add(belt);
+  const passMat = new THREE.MeshStandardMaterial({color:0xb14a4a, roughness:0.55});
+  [-1.0,-0.4,0.9].forEach(dx=>{
+    const o = new THREE.Mesh(new THREE.SphereGeometry(0.15,10,10), passMat);
+    o.position.set(-3.2+dx,1.1,3.3+(Math.random()-0.5)*0.3); o.castShadow=true; scene.add(o);
+  });
+  // camera arch
+  const archMat = new THREE.MeshStandardMaterial({color:0x2b3341, metalness:0.5, roughness:0.4});
+  [-0.5,0.5].forEach(dz=>{
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.08,1.1,0.08), archMat);
+    post.position.set(-3.2,1.5,3.3+dz*1.0); post.castShadow=true; scene.add(post);
+  });
+  const beam = new THREE.Mesh(new THREE.BoxGeometry(0.1,0.1,1.15), archMat);
+  beam.position.set(-3.2,2.05,3.3); scene.add(beam);
+  // camera head (clickable grader) + lens + light bar
+  part(new THREE.BoxGeometry(0.34,0.22,0.3), grader.color, -3.2,1.9,3.3,'grader',grader,{labelLift:0.85, metalness:0.4, roughness:0.35});
+  const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.07,0.06,14), new THREE.MeshStandardMaterial({color:0x0a0d12, metalness:0.8, roughness:0.2}));
+  lens.position.set(-3.2,1.76,3.3); scene.add(lens);
+  const scanBeam = new THREE.Mesh(new THREE.PlaneGeometry(0.9,0.9), new THREE.MeshBasicMaterial({color:0xf2b84b, transparent:true, opacity:0.14, side:THREE.DoubleSide}));
+  scanBeam.rotation.x = -Math.PI/2; scanBeam.position.set(-3.2,0.95,3.3); scene.add(scanBeam);
+  // compute box on arch
+  const compute = new THREE.Mesh(new THREE.BoxGeometry(0.28,0.16,0.2), new THREE.MeshStandardMaterial({color:0x1b6b3a, metalness:0.3, roughness:0.5}));
+  compute.position.set(-3.2,2.2,3.0); compute.castShadow=true; scene.add(compute);
+
+  // reject bin beside the table
+  const rb = PARTS.find(p=>p.id==='rejectbin');
+  part(new THREE.BoxGeometry(0.75,0.55,0.75), rb.color, -5.0,0.45,3.3,'rejectbin',rb,{labelLift:0.75, roughness:0.7, metalness:0.1});
+  [0,1,2].forEach(i=>{
+    const bad = new THREE.Mesh(new THREE.SphereGeometry(0.13,8,8), new THREE.MeshStandardMaterial({color:0x5a3a2a, roughness:0.8}));
+    bad.position.set(-5.0+(i-1)*0.2,0.78,3.3+(i%2?0.1:-0.1)); scene.add(bad);
+  });
+
+  // dashboard stand near exit side of shed
+  const dash = PARTS.find(p=>p.id==='dashboard');
+  const stand = new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.07,1.2,10), archMat);
+  stand.position.set(0.9,0.7,3.4); stand.castShadow=true; scene.add(stand);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.28,0.3,0.06,16), archMat);
+  base.position.set(0.9,0.13,3.4); scene.add(base);
+  const screenPart = part(new THREE.BoxGeometry(0.9,0.6,0.06), dash.color, 0.9,1.55,3.4,'dashboard',dash,{labelLift:0.75, metalness:0.3, roughness:0.3});
+  screenPart.rotation.y = -0.35;
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.8,0.5), new THREE.MeshStandardMaterial({color:0x101a2b, emissive:0x2a3f6e, emissiveIntensity:0.7}));
+  face.position.set(0.9,1.55,3.44); face.rotation.y=-0.35; face.translateZ(0.0); scene.add(face);
+  const sell = new THREE.Mesh(new THREE.PlaneGeometry(0.22,0.12), new THREE.MeshBasicMaterial({color:0x4be07a}));
+  sell.position.set(0.98,1.6,3.445); sell.rotation.y=-0.35; scene.add(sell);
+  const hold = new THREE.Mesh(new THREE.PlaneGeometry(0.22,0.12), new THREE.MeshBasicMaterial({color:0xf2b84b}));
+  hold.position.set(0.72,1.6,3.445); hold.rotation.y=-0.35; scene.add(hold);
+
+  // ---- Insulated roll-down curtain panels (modular kit enclosing the crop zone) ----
+  const cm = PARTS.find(p=>p.id==='curtain');
+  const railY = 4.15, botY = 0.2, CH = railY-botY;
+  const skinMat = new THREE.MeshStandardMaterial({color:0xc4d2de, metalness:0.55, roughness:0.3, transparent:true, opacity:0.5, side:THREE.DoubleSide, depthWrite:false});
+  const seamMat = new THREE.MeshStandardMaterial({color:0xe8eef3, metalness:0.3, roughness:0.5});
+  const hemMat = new THREE.MeshStandardMaterial({color:0x2b3341, roughness:0.8});
+  function curtainWall(axis, fixed, from, to, n){
+    const len = (to-from)/n;
+    for(let i=0;i<n;i++){
+      const c = from + len*(i+0.5);
+      const g = new THREE.Group();
+      const skin = new THREE.Mesh(new THREE.PlaneGeometry(len-0.04, CH), skinMat);
+      skin.position.y = -CH/2; g.add(skin);
+      const seam = new THREE.Mesh(new THREE.BoxGeometry(0.14, CH, 0.02), seamMat);
+      seam.position.set(len/2, -CH/2, 0.01); g.add(seam);
+      const hem = new THREE.Mesh(new THREE.BoxGeometry(len, 0.09, 0.06), hemMat);
+      hem.position.y = -CH+0.045; g.add(hem);
+      if(axis==='x'){ g.position.set(c, railY, fixed); }
+      else { g.position.set(fixed, railY, c); g.rotation.y = Math.PI/2; }
+      scene.add(g); curtainPanels.push(g);
+    }
+  }
+  curtainWall('x', 2.55, -5.9, 1.1, 3);      // front wall
+  curtainWall('z', -5.95, -4.3, 2.55, 3);    // left wall
+  curtainWall('z', 1.1, -4.3, 2.55, 3);      // right wall (crop zone / equipment boundary)
+  // top rails (front rail is labeled; all rails are clickable)
+  const frontRail = part(new THREE.CylinderGeometry(0.08,0.08,7.0,12), 0x8d97a1, -2.4, railY, 2.55, 'curtain', cm, {labelLift:0.7, metalness:0.6, roughness:0.35});
+  frontRail.rotation.z = Math.PI/2;
+  [[-5.95,-0.875],[1.1,-0.875]].forEach(([x,z])=>{
+    const r = new THREE.Mesh(new THREE.CylinderGeometry(0.08,0.08,6.85,12), new THREE.MeshStandardMaterial({color:0x8d97a1, metalness:0.6, roughness:0.35}));
+    r.rotation.x = Math.PI/2; r.position.set(x, railY, z); r.castShadow = true;
+    r.userData = {id:'curtain', baseColor:0x8d97a1, ...cm};
+    scene.add(r); clickable.push(r);
+  });
+  // hand-crank wheel + rope at the front-left corner
+  const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.012,2.95,6), new THREE.MeshStandardMaterial({color:0x6b5233}));
+  rope.position.set(-5.9, 2.68, 2.6); scene.add(rope);
+  const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.17,0.17,0.05,16), new THREE.MeshStandardMaterial({color:0x2b3341, metalness:0.5, roughness:0.4}));
+  wheel.rotation.x = Math.PI/2; wheel.position.set(-5.9, 1.2, 2.62); wheel.castShadow = true; scene.add(wheel);
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.04,0.04,0.14), new THREE.MeshStandardMaterial({color:0xf2b84b}));
+  handle.position.set(-5.78, 1.2, 2.7); scene.add(handle);
+
+  // VOC sensor — small vented canister near Zone 2 sensor
+  const voc = PARTS.find(p=>p.id==='voc');
+  part(new THREE.CylinderGeometry(0.09,0.09,0.28,10), voc.color, -1.1,1.3,-1.7,'voc',voc,{labelLift:0.55, metalness:0.3, roughness:0.4});
+
+  // water drainage — tray under condenser + pipe to ground
+  const drain = PARTS.find(p=>p.id==='drainage');
+  part(new THREE.BoxGeometry(1.5,0.08,1.1), drain.color, 2.9,0.42,-1.8,'drainage',drain,{labelLift:0.5, metalness:0.4, roughness:0.3});
+  const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,0.42,8), new THREE.MeshStandardMaterial({color:0x2f6a91, metalness:0.4, roughness:0.4}));
+  pipe.position.set(2.9,0.2,-1.35); pipe.castShadow=true; scene.add(pipe);
+  const puddle = new THREE.Mesh(new THREE.CircleGeometry(0.22,16), new THREE.MeshStandardMaterial({color:0x3d94c7, roughness:0.15, metalness:0.6, transparent:true, opacity:0.7}));
+  puddle.rotation.x=-Math.PI/2; puddle.position.set(2.9,0.02,-1.15); scene.add(puddle);
+
+  // solar panel — optional rooftop array
+  const solar = PARTS.find(p=>p.id==='solar');
+  const panelMesh = part(new THREE.BoxGeometry(1.8,0.06,1.1), solar.color, -3.4,5.05,1.9,'solar',solar,{labelLift:0.5, metalness:0.6, roughness:0.25});
+  panelMesh.rotation.x = 0.28;
+  for(let gx=-0.7;gx<=0.7;gx+=0.35){
+    const grid = new THREE.Mesh(new THREE.BoxGeometry(0.02,0.02,1.05), new THREE.MeshStandardMaterial({color:0x0a1830}));
+    grid.position.set(-3.4+gx, 5.08+gx*Math.tan(0.28), 1.9); grid.rotation.x=0.28; scene.add(grid);
+  }
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(1.86,0.05,1.16), new THREE.MeshStandardMaterial({color:0x8a97a3, metalness:0.5, roughness:0.4}));
+  frame.position.set(-3.4,5.02,1.9); frame.rotation.x=0.28; scene.add(frame);
+}
+
+function buildLegend(){
+  const list = document.getElementById('legend-list');
+  PARTS.forEach(p=>{
+    const row = document.createElement('div');
+    row.className = 'legend-item';
+    row.id = 'legend-'+p.id;
+    row.innerHTML = `<span class="dot" style="background:#${p.color.toString(16).padStart(6,'0')}"></span><span>${p.name}</span>`;
+    row.addEventListener('click', ()=>showInfo(p, true));
+    list.appendChild(row);
+  });
+}
+
+function onClick(e){
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((e.clientX-rect.left)/rect.width)*2-1;
+  mouse.y = -((e.clientY-rect.top)/rect.height)*2+1;
+  raycaster.setFromCamera(mouse, camera);
+  const hits = raycaster.intersectObjects(clickable);
+  if(hits.length){
+    const d = hits[0].object.userData;
+    showInfo(d, false);
+  }
+}
+
+function showInfo(meta, focusOnly){
+  activeInfoId = meta.id;
+  document.querySelectorAll('.legend-item').forEach(el=>el.classList.remove('active'));
+  const row = document.getElementById('legend-'+meta.id);
+  if(row) row.classList.add('active');
+  document.getElementById('info-title').textContent = meta.name;
+  document.getElementById('info-desc').textContent = meta.desc;
+  document.getElementById('info-mode').textContent = '';
+  document.getElementById('info').style.display = 'block';
+}
+function closeInfo(){
+  document.getElementById('info').style.display='none';
+  document.querySelectorAll('.legend-item').forEach(el=>el.classList.remove('active'));
+}
+
+function setMode(m){
+  mode = m;
+  curtainTarget = (m==='dry') ? 1 : 0;
+  document.getElementById('btn-vent').classList.toggle('active', m==='vent');
+  document.getElementById('btn-dry').classList.toggle('active', m==='dry');
+  clickable.forEach(obj=>{
+    if(obj.userData.id==='damperVent'){
+      obj.material.emissive = new THREE.Color(m==='vent'?0x1a4a66:0x000000);
+      obj.material.emissiveIntensity = m==='vent'?0.8:0;
+    }
+    if(obj.userData.id==='damperDry'){
+      obj.material.emissive = new THREE.Color(m==='dry'?0x662a1a:0x000000);
+      obj.material.emissiveIntensity = m==='dry'?0.8:0;
+    }
+    if(obj.userData.id==='condenser' || obj.userData.id==='fans' || obj.userData.id==='desiccant'){
+      obj.material.emissive = new THREE.Color(m==='dry'?0x333333:0x000000);
+      obj.material.emissiveIntensity = m==='dry'?0.35:0;
+    }
+  });
+}
+setMode('vent');
+
+function onResize(){
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function toggleLabels(){
+  labelsOn = !labelsOn;
+  const btn = document.getElementById('btn-labels');
+  btn.textContent = 'Labels: '+(labelsOn?'On':'Off');
+  btn.classList.toggle('active', labelsOn);
+  labelSprites.forEach(s=> s.visible = labelsOn);
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+  curtainP += (curtainTarget - curtainP) * 0.06;
+  const cs = 0.05 + 0.95*curtainP;
+  for(let i=0;i<curtainPanels.length;i++){ curtainPanels[i].scale.y = cs; }
+  controls.update();
+  renderer.render(scene, camera);
+}
+</script>
+</body>
+</html>
